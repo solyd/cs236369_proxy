@@ -44,12 +44,8 @@ public class HttpProxyModule extends AbstractModule {
     @Override
     protected void configure() {
         Names.bindProperties(binder(), properties);
-
         bind(ServerSocketFactory.class).toInstance(ServerSocketFactory.getDefault());
-
         bind(SocketFactory.class).toInstance(SocketFactory.getDefault());
-
         bind(HttpProxy.class).in(Scopes.SINGLETON);
     }
-
 }
