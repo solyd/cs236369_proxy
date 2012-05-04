@@ -5,6 +5,9 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Properties;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Formatter;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import javax.net.ServerSocketFactory;
@@ -43,7 +46,37 @@ import com.google.inject.name.Named;
 // chromium --proxy-server="localhost:8080"
 
 public class HttpProxy {
+
+    public static final String CACHE = "cache";
+    public static final int MAX_RESPONSE_SIZE = 65535; // bytes
+
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    // Logger stuff
+    //
     private static Logger log = Logger.getLogger(HttpProxy.class.getName());
+
+    static {
+        log.setUseParentHandlers(false);
+        ConsoleHandler handler = new ConsoleHandler();
+        handler.setFormatter(new ProxyLogFormatter());
+        log.addHandler(handler);
+    }
+
+    static class ProxyLogFormatter extends Formatter {
+
+        @Override
+        public String format(LogRecord rec) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("[").append(rec.getSourceClassName()).append(".");
+            sb.append(rec.getSourceMethodName()).append(" - ");
+            sb.append(rec.getLevel()).append("] ");
+            sb.append(formatMessage(rec));
+            sb.append("\n");
+            return sb.toString();
+        }
+
+    }
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
     private ServerSocketFactory mServSockFact;
     private SocketFactory       mSockFact;
@@ -51,6 +84,7 @@ public class HttpProxy {
     private ServerSocket        mServSock;
     private HttpParams          mHttpParams;
     private HttpService         mHttpService;
+    private ProxyCache          mCache;
 
     /**
      * Constructs the proxy
@@ -81,13 +115,14 @@ public class HttpProxy {
               @Named("httproxy.db.username") String dbUsername,
               @Named("httproxy.db.password") String dbPassword,
               @Named("httproxy.db.driver") String dbDriver) {
+        log.info("Initializing Http Proxy");
 
         mSockFact = sockFactory;
         mServSockFact = srvSockFactory;
         mServPort = port;
 
 
-        // setup http request handling
+        // Setup HTTP request handling
         // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         mHttpParams = new SyncBasicHttpParams();
         mHttpParams.setIntParameter(CoreConnectionPNames.SO_TIMEOUT, 5000);
@@ -128,8 +163,7 @@ public class HttpProxy {
         mHttpService.setParams(mHttpParams);
         mHttpService.setHandlerResolver(reqistry);
 
-        // [TODO] complete init of proxy with db stuff
-        // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        mCache = new ProxyCache(dbURL, dbName, tblName, dbUsername, dbPassword, dbDriver);
     }
 
     /**
@@ -153,10 +187,11 @@ public class HttpProxy {
                 // Set up incoming HTTP connection
                 Socket clientSock = mServSock.accept();
                 DefaultHttpServerConnection conn = new DefaultHttpServerConnection();
-                log.info("Client from ip: " + clientSock.getInetAddress() + "\n");
+                log.fine("Client from ip: " + clientSock.getInetAddress() + "\n");
                 conn.bind(clientSock, mHttpParams);
 
                 HttpContext context = new BasicHttpContext(null);
+                context.setAttribute(CACHE, mCache);
                 try {
                     mHttpService.handleRequest(conn, context);
                 }

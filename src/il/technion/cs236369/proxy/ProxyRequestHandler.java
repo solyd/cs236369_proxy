@@ -9,6 +9,7 @@ import javax.net.SocketFactory;
 import org.apache.http.HeaderIterator;
 import org.apache.http.HttpException;
 import org.apache.http.HttpHost;
+import org.apache.http.HttpMessage;
 import org.apache.http.HttpRequest;
 import org.apache.http.HttpResponse;
 import org.apache.http.impl.DefaultHttpClientConnection;
@@ -22,13 +23,13 @@ import org.apache.http.protocol.HttpRequestHandler;
 
 public class ProxyRequestHandler implements HttpRequestHandler {
 
-    private static Logger log = Logger.getLogger(ProxyRequestHandler.class.getName());
+    private static Logger log = Logger.getLogger(HttpProxy.class.getName());
     private static final String HTTP_OUT_CONN = "http.proxy.out-conn";
 
-    private SocketFactory mSockFact;
-    private BasicHttpProcessor mOutHttpProc;
+    private SocketFactory       mSockFact;
+    private BasicHttpProcessor  mOutHttpProc;
     private HttpRequestExecutor mHttpExec;
-    private HttpParams mHttpParams;
+    private HttpParams          mHttpParams;
 
     public ProxyRequestHandler(HttpParams httpParams,
                                BasicHttpProcessor outHttpProc,
@@ -40,24 +41,36 @@ public class ProxyRequestHandler implements HttpRequestHandler {
         mSockFact = sockFact;
     }
 
+    private void logHeaders(HttpMessage msg) {
+        if (msg == null)
+            return;
+
+        HeaderIterator hi = msg.headerIterator();
+        StringBuilder headers = new StringBuilder();
+        headers.append("\n");
+        if (msg instanceof HttpRequest)
+            headers.append("Request Headers:\n");
+        else if (msg instanceof HttpResponse)
+            headers.append("Response Headers:\n");
+        else
+            headers.append("Headers of unkown type of HttpMessage");
+        while (hi.hasNext())
+            headers.append("\t" + hi.next().toString() + "\n");
+        log.info(headers.toString());
+    }
+
     @Override
     public void handle(HttpRequest request,
                        HttpResponse response,
                        HttpContext context) throws HttpException, IOException {
-
-        // log request headers
-        HeaderIterator hi = request.headerIterator();
-        StringBuilder headers = new StringBuilder();
-        headers.append("\n");
-        while (hi.hasNext())
-            headers.append("\t" + hi.next().toString() + "\n");
-        log.info("\t[Request headers] : " + headers.toString());
-        // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        logHeaders(request);
+        ProxyCache cache = (ProxyCache) context.getAttribute(HttpProxy.CACHE);
 
         HttpHost targetHost = new HttpHost(request.getFirstHeader("Host").getValue(), 80);
 
         // Set up outgoing HTTP connection
-        Socket outsocket = mSockFact.createSocket(targetHost.getHostName(), targetHost.getPort());
+        Socket outsocket = mSockFact.createSocket(targetHost.getHostName(),
+                                                  targetHost.getPort());
         DefaultHttpClientConnection outconn = new DefaultHttpClientConnection();
         outconn.bind(outsocket, mHttpParams);
         log.info("Outgoing connection to " + outsocket.getInetAddress());
@@ -67,7 +80,7 @@ public class ProxyRequestHandler implements HttpRequestHandler {
         context.setAttribute(ExecutionContext.HTTP_CONNECTION, outconn);
         context.setAttribute(ExecutionContext.HTTP_TARGET_HOST, targetHost);
 
-        log.info("[Request URI] : " + request.getRequestLine().getUri() + "\n");
+        log.info("Request URI: " + request.getRequestLine().getUri());
 
         // Remove hop-by-hop headers
         request.removeHeaders(HTTP.CONTENT_LEN);
@@ -96,15 +109,7 @@ public class ProxyRequestHandler implements HttpRequestHandler {
         response.setHeaders(targetResponse.getAllHeaders());
         response.setEntity(targetResponse.getEntity());
 
-        log.info("[Response] : " + response.getStatusLine() + "\n");
-
-        // log response headers
-        hi = response.headerIterator();
-        headers = new StringBuilder();
-        headers.append("\n");
-        while (hi.hasNext())
-            headers.append("\t" + hi.next().toString() + "\n");
-        log.info("\t[Response headers] : " + headers.toString());
-        // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        log.info("Response: " + response.getStatusLine());
+        logHeaders(response);
     }
 }
