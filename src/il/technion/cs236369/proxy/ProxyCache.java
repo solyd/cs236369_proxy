@@ -9,6 +9,8 @@ import java.sql.Statement;
 import java.util.Properties;
 import java.util.logging.Logger;
 
+import org.apache.http.Header;
+
 
 //httproxy.db.driver = com.mysql.jdbc.Driver
 //httproxy.db.url = jdbc:mysql://127.0.0.1:3306/
@@ -39,27 +41,34 @@ public class ProxyCache {
             p.put("user", dbUser);
             p.put("password", dbPasswd);
 
-            StringBuilder info = new StringBuilder();
-            info.append("\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
-            info.append("Attempting to connect to db with following parameters:\n");
-            info.append("\t[DB URL] " + dbUrl + "\n");
-            info.append("\t[DB name] " + dbName + "\n");
-            info.append("\t[Table name] " + tblName + "\n");
-            info.append("\t[User] " + dbUser + "\n");
-            info.append("\t[Password] " + dbPasswd + "\n");
-            info.append("\t[Driver] " + dbDriver + "\n");
-            info.append("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
-            log.info(info.toString());
-
-
             // Now try to connect
             dbconn = DriverManager.getConnection(dbUrl, p);
             log.info("db connection successfull !");
             dbconn.createStatement().executeQuery("USE " + dbName);
         }
         catch (Exception e) {
-            e.printStackTrace(System.err);
+            System.err.println("[!] Problem connecting/using cache DB - will continue without using cache");
+            dbconn = null;
         }
+    }
+
+    public void store(String url, Header[] headers, byte[] body) {
+        if (dbconn == null)
+            return;
+
+        StringBuilder headersString = new StringBuilder();
+        StringBuilder headersInfo = new StringBuilder();
+        for (int i = 0; i < headers.length; ++i) {
+            headersString.append(headers[i].toString() + "\r\n");
+            headersInfo.append("\t\t" + headers[i].toString() + "\n");
+        }
+
+        StringBuilder loginfo = new StringBuilder();
+        loginfo.append("storing following entry in the cache:\n");
+        loginfo.append("\turl: " + url + "\n");
+        loginfo.append("\theaders:\n" + headersInfo.toString());
+        //loginfo.append("\tbody: " + body.toString());
+        log.severe(loginfo.toString());
     }
 
     public void printCache(PrintStream stream) {
@@ -77,6 +86,9 @@ public class ProxyCache {
     }
 
     public void close() {
+        if (dbconn == null)
+            return;
+
         try {
             dbconn.close();
         }
@@ -87,6 +99,9 @@ public class ProxyCache {
     }
 
     private void writeResultSet(PrintStream stream, ResultSet rs) {
+        if (dbconn == null)
+            return;
+
         try {
             StringBuilder sb = new StringBuilder();
             sb.append("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
@@ -96,6 +111,7 @@ public class ProxyCache {
                 sb.append("[URL]\t" + rs.getString(1) + "\n");
                 sb.append("[Headers]:\n" + rs.getString(2));
                 sb.append(sb.toString() + "\n");
+                // note - didn't print the content of response
                 sb.append("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
             }
 

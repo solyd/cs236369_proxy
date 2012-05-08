@@ -49,6 +49,8 @@ public class HttpProxy {
 
     public static final String CACHE = "cache";
     public static final int MAX_RESPONSE_SIZE = 65535; // bytes
+    public static final String CLIENT_CONN = "CLIENT_CONN";
+    public static final String TARGET_CONN = "TARGET_CONN";
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // Logger stuff
@@ -60,6 +62,7 @@ public class HttpProxy {
         ConsoleHandler handler = new ConsoleHandler();
         handler.setFormatter(new ProxyLogFormatter());
         log.addHandler(handler);
+        //log.setLevel(Level.SEVERE);
     }
 
     static class ProxyLogFormatter extends Formatter {
@@ -183,35 +186,47 @@ public class HttpProxy {
      */
     public void start() {
         while (true) {
+            Socket clientSock;
+            // Set up incoming HTTP connection
             try {
-                // Set up incoming HTTP connection
-                Socket clientSock = mServSock.accept();
-                DefaultHttpServerConnection conn = new DefaultHttpServerConnection();
-                log.fine("Client from ip: " + clientSock.getInetAddress() + "\n");
-                conn.bind(clientSock, mHttpParams);
-
-                HttpContext context = new BasicHttpContext(null);
-                context.setAttribute(CACHE, mCache);
-                try {
-                    mHttpService.handleRequest(conn, context);
-                }
-                catch (ConnectionClosedException ex) {
-                    System.err.println("Client closed connection");
-                }
-                catch (IOException ex) {
-                    System.err.println("I/O error: " + ex.getMessage());
-                }
-                catch (HttpException ex) {
-                    System.err.println("Unrecoverable HTTP protocol violation: " + ex.getMessage());
-                }
-                finally {
-                    try {
-                        conn.shutdown();
-                    } catch (IOException ignore) {}
-                }
+                clientSock = mServSock.accept();
             }
             catch (IOException e) {
-                e.printStackTrace(System.err);
+                System.err.println("[!] Client socket creation failed.");
+                continue;
+            }
+
+            DefaultHttpServerConnection conn = new DefaultHttpServerConnection();
+
+            try {
+                conn.bind(clientSock, mHttpParams);
+            }
+            catch (IOException e) {
+                System.err.println("[!] Connection with client failed");
+                continue;
+            }
+            log.info("Client from ip: " + clientSock.getInetAddress() + "\n");
+
+
+            HttpContext context = new BasicHttpContext(null);
+            context.setAttribute(CLIENT_CONN, conn);
+            context.setAttribute(CACHE, mCache);
+            try {
+                mHttpService.handleRequest(conn, context);
+            }
+            catch (ConnectionClosedException ex) {
+                System.err.println("[!] Client closed connection");
+            }
+            catch (IOException ex) {
+                System.err.println("[!] " + ex.getMessage());
+            }
+            catch (HttpException ex) {
+                System.err.println("[!] Unrecoverable HTTP protocol violation: " + ex.getMessage());
+            }
+            finally {
+                try {
+                    conn.shutdown();
+                } catch (IOException ignore) {}
             }
         }
     }
