@@ -88,18 +88,14 @@ public class ElementalReverseProxy {
     private static final String HTTP_CONN_KEEPALIVE = "http.proxy.conn-keepalive";
     
     public static void main(String[] args) throws Exception {
-        if (args.length < 1) {
-            System.err.println("Please specified target hostname and port");
-            System.exit(1);
-        }
-        String hostname = args[0];
+        String hostname = "t2.technion.ac.il";
         int port = 80;
         if (args.length > 1) {
             port = Integer.parseInt(args[1]);
         }
         HttpHost target = new HttpHost(hostname, port);
         
-        Thread t = new RequestListenerThread(8888, target);
+        Thread t = new RequestListenerThread(8080, target);
         t.setDaemon(false);
         t.start();
     }

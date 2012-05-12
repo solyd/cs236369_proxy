@@ -4,6 +4,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.Properties;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Formatter;
@@ -15,16 +16,17 @@ import javax.net.SocketFactory;
 
 import org.apache.http.ConnectionClosedException;
 import org.apache.http.HttpException;
+import org.apache.http.HttpVersion;
 import org.apache.http.impl.DefaultConnectionReuseStrategy;
 import org.apache.http.impl.DefaultHttpResponseFactory;
 import org.apache.http.impl.DefaultHttpServerConnection;
+import org.apache.http.message.BasicHttpResponse;
 import org.apache.http.params.CoreConnectionPNames;
 import org.apache.http.params.CoreProtocolPNames;
 import org.apache.http.params.HttpParams;
 import org.apache.http.params.SyncBasicHttpParams;
 import org.apache.http.protocol.BasicHttpContext;
 import org.apache.http.protocol.BasicHttpProcessor;
-import org.apache.http.protocol.HttpContext;
 import org.apache.http.protocol.HttpRequestExecutor;
 import org.apache.http.protocol.HttpRequestHandlerRegistry;
 import org.apache.http.protocol.HttpService;
@@ -47,10 +49,12 @@ import com.google.inject.name.Named;
 
 public class HttpProxy {
 
-    public static final String CACHE = "cache";
     public static final int MAX_RESPONSE_SIZE = 65535; // bytes
     public static final String CLIENT_CONN = "CLIENT_CONN";
     public static final String TARGET_CONN = "TARGET_CONN";
+
+    private static final BasicHttpResponse ERR_RESPONSE =
+        new BasicHttpResponse(HttpVersion.HTTP_1_1, 500, "Internal Server Error");
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // Logger stuff
@@ -66,12 +70,12 @@ public class HttpProxy {
     }
 
     static class ProxyLogFormatter extends Formatter {
-
         @Override
         public String format(LogRecord rec) {
             StringBuilder sb = new StringBuilder();
-            sb.append("[").append(rec.getSourceClassName()).append(".");
-            sb.append(rec.getSourceMethodName()).append(" - ");
+            sb.append("[");
+            //sb.append("[").append(rec.getSourceClassName()).append(".");
+            //sb.append(rec.getSourceMethodName()).append(" - ");
             sb.append(rec.getLevel()).append("] ");
             sb.append(formatMessage(rec));
             sb.append("\n");
@@ -81,13 +85,13 @@ public class HttpProxy {
     }
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-    private ServerSocketFactory mServSockFact;
-    private SocketFactory       mSockFact;
-    private int                 mServPort;
-    private ServerSocket        mServSock;
-    private HttpParams          mHttpParams;
-    private HttpService         mHttpService;
-    private ProxyCache          mCache;
+    private ServerSocketFactory m_servSockFact;
+    private SocketFactory       m_clientSockFact;
+    private int                 m_port;
+    private ServerSocket        m_socket;
+    private HttpParams          m_httpparams;
+    private HttpService         m_httpservice;
+    private ProxyCache          m_cache;
 
     /**
      * Constructs the proxy
@@ -120,19 +124,18 @@ public class HttpProxy {
               @Named("httproxy.db.driver") String dbDriver) {
         log.info("Initializing Http Proxy");
 
-        mSockFact = sockFactory;
-        mServSockFact = srvSockFactory;
-        mServPort = port;
+        m_clientSockFact = sockFactory;
+        m_servSockFact = srvSockFactory;
+        m_port = port;
 
 
         // Setup HTTP request handling
-        // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        mHttpParams = new SyncBasicHttpParams();
-        mHttpParams.setIntParameter(CoreConnectionPNames.SO_TIMEOUT, 5000);
-        mHttpParams.setIntParameter(CoreConnectionPNames.SOCKET_BUFFER_SIZE, 8 * 1024);
-        mHttpParams.setBooleanParameter(CoreConnectionPNames.STALE_CONNECTION_CHECK, false);
-        mHttpParams.setBooleanParameter(CoreConnectionPNames.TCP_NODELAY, true);
-        mHttpParams.setParameter(CoreProtocolPNames.ORIGIN_SERVER, "HttpComponents/1.1");
+        m_httpparams = new SyncBasicHttpParams();
+        m_httpparams.setIntParameter(CoreConnectionPNames.SO_TIMEOUT, 5000);
+        m_httpparams.setIntParameter(CoreConnectionPNames.SOCKET_BUFFER_SIZE, 8 * 1024);
+        m_httpparams.setBooleanParameter(CoreConnectionPNames.STALE_CONNECTION_CHECK, false);
+        m_httpparams.setBooleanParameter(CoreConnectionPNames.TCP_NODELAY, true);
+        m_httpparams.setParameter(CoreProtocolPNames.ORIGIN_SERVER, "HttpComponents/1.1");
 
         // Set up HTTP protocol processor for incoming connections
         BasicHttpProcessor inhttpproc = new BasicHttpProcessor();
@@ -149,24 +152,26 @@ public class HttpProxy {
         outhttpproc.addInterceptor(new RequestUserAgent());
         outhttpproc.addInterceptor(new RequestExpectContinue());
 
+        // Initialize cache
+        m_cache = new ProxyCache(dbURL, dbName, tblName, dbUsername, dbPassword, dbDriver);
+
         // Set up outgoing request executor
         HttpRequestExecutor httpexecutor = new HttpRequestExecutor();
 
         // Set up incoming request handler
         HttpRequestHandlerRegistry reqistry = new HttpRequestHandlerRegistry();
-        reqistry.register("*", new ProxyRequestHandler(mHttpParams,
+        reqistry.register("*", new ProxyRequestHandler(m_httpparams,
                                                        outhttpproc,
                                                        httpexecutor,
-                                                       mSockFact));
+                                                       m_clientSockFact,
+                                                       m_cache));
 
         // Set up the HTTP service
-        mHttpService = new HttpService(inhttpproc,
+        m_httpservice = new HttpService(inhttpproc,
                                        new DefaultConnectionReuseStrategy(),
                                        new DefaultHttpResponseFactory());
-        mHttpService.setParams(mHttpParams);
-        mHttpService.setHandlerResolver(reqistry);
-
-        mCache = new ProxyCache(dbURL, dbName, tblName, dbUsername, dbPassword, dbDriver);
+        m_httpservice.setParams(m_httpparams);
+        m_httpservice.setHandlerResolver(reqistry);
     }
 
     /**
@@ -175,7 +180,7 @@ public class HttpProxy {
      * @throws IOException unable to bind the server socket
      */
     public void bind() throws IOException {
-        mServSock = mServSockFact.createServerSocket(mServPort);
+        m_socket = m_servSockFact.createServerSocket(m_port);
     }
 
     /**
@@ -185,11 +190,12 @@ public class HttpProxy {
      * the one passed to the constructor.
      */
     public void start() {
+        log.info("HttpProxy is listening on port " + m_socket.getLocalPort());
+
         while (true) {
             Socket clientSock;
-            // Set up incoming HTTP connection
             try {
-                clientSock = mServSock.accept();
+                clientSock = m_socket.accept();
             }
             catch (IOException e) {
                 System.err.println("[!] Client socket creation failed.");
@@ -197,37 +203,50 @@ public class HttpProxy {
             }
 
             DefaultHttpServerConnection conn = new DefaultHttpServerConnection();
-
             try {
-                conn.bind(clientSock, mHttpParams);
+                conn.bind(clientSock, m_httpparams);
             }
             catch (IOException e) {
                 System.err.println("[!] Connection with client failed");
                 continue;
             }
+
             log.info("Client from ip: " + clientSock.getInetAddress() + "\n");
-
-
-            HttpContext context = new BasicHttpContext(null);
-            context.setAttribute(CLIENT_CONN, conn);
-            context.setAttribute(CACHE, mCache);
             try {
-                mHttpService.handleRequest(conn, context);
+
+                m_httpservice.handleRequest(conn, new BasicHttpContext(null));
+
             }
             catch (ConnectionClosedException ex) {
                 System.err.println("[!] Client closed connection");
             }
-            catch (IOException ex) {
-                System.err.println("[!] " + ex.getMessage());
+            catch (UnknownHostException e) {
+                System.err.println("[!] Unknown destination host");
+                sendErr(conn);
+            }
+            catch (IOException e) {
+                System.err.println("[!] " + e.getMessage());
             }
             catch (HttpException ex) {
-                System.err.println("[!] Unrecoverable HTTP protocol violation: " + ex.getMessage());
+                System.err.println("[!] HTTP protocol violation: " + ex.getMessage());
+                sendErr(conn);
             }
             finally {
                 try {
                     conn.shutdown();
                 } catch (IOException ignore) {}
             }
+        }
+    }
+
+
+    private void sendErr(DefaultHttpServerConnection con) {
+        try {
+            con.sendResponseHeader(ERR_RESPONSE);
+            con.flush();
+        }
+        catch (Exception e2) {
+            System.err.println("[!] Failed to send error respones to client");
         }
     }
 
