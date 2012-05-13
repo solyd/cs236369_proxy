@@ -93,7 +93,10 @@ public class ProxyRequestHandler implements HttpRequestHandler
                 }
 
                 if (rescode != HttpStatus.SC_OK) {
+                    log.info("validation failed, invalidating cache and returning the response");
                     m_cache.invalidate(requestUri);
+                    copyResponse(validationRes, response);
+                    return;
                 }
                 else {
                     log.info("setting body from the validation response and updating cache if possible...");
@@ -102,6 +105,7 @@ public class ProxyRequestHandler implements HttpRequestHandler
 
                     logHeaders(response);
 
+                    m_cache.invalidate(requestUri);
                     if (isCacheable(request, response))
                         m_cache.store(requestUri, response.getAllHeaders(), resbody);
 
@@ -136,7 +140,7 @@ public class ProxyRequestHandler implements HttpRequestHandler
                 return false;
         }
 
-        return true;
+        return request.getRequestLine().getMethod().toUpperCase(Locale.ENGLISH).equals("GET");
     }
 
     /**
@@ -319,14 +323,15 @@ public class ProxyRequestHandler implements HttpRequestHandler
         for (Header h : transferHeaders)
             if (h.getValue().equals("chunked"))
                 return false;
+
         Header[] cacheHeaders = response.getHeaders("Cache-Control");
         for (Header h1 : cacheHeaders) {
             String hval = h1.getValue();
             if (hval.equals("no-store") || hval.equals("no-cache"))
                 return false;
         }
-        String requestMethod = request.getRequestLine().getMethod()
-            .toUpperCase(Locale.ENGLISH);
+
+        String requestMethod = request.getRequestLine().getMethod().toUpperCase(Locale.ENGLISH);
         return requestMethod.equals("GET")
                && response.getStatusLine().getStatusCode() == 200
                && response.getFirstHeader("Last-Modified") != null;
